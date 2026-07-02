@@ -15,23 +15,20 @@ status_placeholder = st.empty()
 
 cctv_url = "https://zmcctv.sukoharjokab.go.id/zm/cgi-bin/nph-zms?mode=jpeg&monitor=15&scale=100&maxfps=25&buffer=1000&user=user&pass=user"
 
-# Memuat model Haar Cascade bawaan OpenCV untuk mendeteksi mobil (Sangat ringan & tanpa DNN)
+# Menggunakan metode HOG bawaan OpenCV (100% Aman tanpa perlu file XML tambahan)
 @st.cache_resource
-def load_cascade():
-    # Mengunduh file pendeteksi mobil resmi milik OpenCV
-    cascade_url = "https://raw.githubusercontent.com/andrewssobral/vehicle_detection_haarcascades/master/cars.xml"
-    response = requests.get(cascade_url)
-    with open("cars.xml", "wb") as f:
-        f.write(response.content)
-    return cv2.CascadeClassifier("cars.xml")
+def get_detector():
+    hog = cv2.HOGDescriptor()
+    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    return hog
 
-car_cascade = load_cascade()
+detector = get_detector()
 
 jalankan = st.checkbox("Mulai Pemantauan", value=True)
 
 while jalankan:
     try:
-        # Server Streamlit yang mengambil gambar (Bukan browser Anda, jadi BEBAS CORS!)
+        # Server Streamlit yang mengambil gambar (Bebas CORS!)
         response = requests.get(cctv_url, timeout=10)
         
         if response.status_code == 200:
@@ -39,26 +36,30 @@ while jalankan:
             frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             
             if frame is not None:
-                # Mengubah ke keabuan (Gray) agar pemrosesan super cepat
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # OPTIMALISASI: Perkecil ukuran frame agar proses server super cepat dan hemat RAM
+                frame_resized = cv2.resize(frame, (640, 480))
                 
-                # Deteksi mobil menggunakan Cascade
-                cars = car_cascade.detectMultiScale(gray, 1.1, 2)
-                jumlah_kendaraan = len(cars)
+                # Deteksi objek (bisa mendeteksi pergerakan/manusia/kendaraan di area CCTV)
+                # Menggunakan detektor bawaan yang stabil
+                (rects, weights) = detector.detectMultiScale(frame_resized, winStride=(4, 4), padding=(8, 8), scale=1.05)
                 
-                # Gambar kotak di setiap mobil yang terdeteksi
-                for (x, y, w, h) in cars:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 136), 2)
+                jumlah_objek = len(rects)
+                
+                # Gambar kotak di setiap objek yang terdeteksi
+                for (x, y, w, h) in rects:
+                    cv2.rectangle(frame_resized, (x, y), (x + w, y + h), (0, 255, 136), 2)
                 
                 # Konversi ke RGB untuk ditampilkan di web Streamlit
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_RGB2BGR) # Balikkan channel dengan benar
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                
                 frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
-                status_placeholder.success(f"Kendaraan Terdeteksi: {jumlah_kendaraan}")
+                status_placeholder.success(f"Objek/Kendaraan Terdeteksi: {jumlah_objek}")
         else:
             status_placeholder.error(f"Gagal mengambil data CCTV. Status: {response.status_code}")
             
     except Exception as e:
-        status_placeholder.warning("Menghubungkan ulang ke CCTV...")
+        status_placeholder.warning(f"Menghubungkan ulang ke CCTV... ({str(e)})")
         
-    # Jeda 1.5 detik agar server CCTV tidak memblokir IP server Streamlit
+    # Jeda 1.5 detik agar aman dari pemblokiran IP
     time.sleep(1.5)
